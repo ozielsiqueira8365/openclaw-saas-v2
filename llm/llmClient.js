@@ -1,79 +1,80 @@
-export async function callLLM({
-  system,
-  messages = [],
-  temperature = 0.3,
-  max_tokens = 800
-}) {
-  const apiKey = process.env.MOONSHOT_API_KEY;
-  const baseUrl = (process.env.MOONSHOT_BASE_URL || "").replace(/\/+$/, "");
-  const model = process.env.MOONSHOT_MODEL;
+// llm/llmClient.js
+import fetch from "node-fetch";
 
-  if (!apiKey) throw Object.assign(new Error("MOONSHOT_API_KEY não definido"), { status: 500 });
-  if (!baseUrl) throw Object.assign(new Error("MOONSHOT_BASE_URL não definido"), { status: 500 });
-  if (!model) throw Object.assign(new Error("MOONSHOT_MODEL não definido"), { status: 500 });
+const NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1/chat/completions";
+const MODEL = process.env.NVIDIA_MODEL || "meta/llama-3.1-70b-instruct";
 
-  const payload = {
-    model,
-    messages: [
-      ...(system ? [{ role: "system", content: system }] : []),
-      ...messages
-    ],
-    temperature,
-    max_tokens
-  };
+function extractMessage(choice) {
+  if (!choice || !choice.message) return null;
 
-  const url = `${baseUrl}/chat/completions`;
+  const msg = choice.message;
 
-  // ✅ Timeout hard (25s)
+  // 🔥 ORDEM IMPORTANTE
+  if (typeof msg.content === "string" && msg.content.trim() !== "") {
+    return msg.content.trim();
+  }
+
+  if (typeof msg.reasoning_content === "string" && msg.reasoning_content.trim() !== "") {
+    return msg.reasoning_content.trim();
+  }
+
+  if (typeof msg.reasoning === "string" && msg.reasoning.trim() !== "") {
+    return msg.reasoning.trim();
+  }
+
+  return null;
+}
+
+export async function callLLM({ messages, temperature = 0.7, max_tokens = 1024 }) {
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), 25000);
-
-  const started = Date.now();
-  console.log("🧠 callLLM ->", url, "model=", model);
+  const timeout = setTimeout(() => controller.abort(), 45_000); // 45s hard timeout
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch(NVIDIA_ENDPOINT, {
       method: "POST",
+      signal: controller.signal,
       headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
       },
-      body: JSON.stringify(payload),
-      signal: controller.signal
+      body: JSON.stringify({
+        model: MODEL,
+        messages,
+        temperature,
+        max_tokens,
+      }),
     });
 
-    const text = await res.text();
-    const ms = Date.now() - started;
+    clearTimeout(timeout);
 
     if (!res.ok) {
-      console.error("❌ callLLM HTTP", res.status, "ms=", ms, "body=", text.slice(0, 400));
-      const err = Object.assign(new Error(text || "LLM error"), { status: res.status, payload: text });
-      throw err;
+      const errText = await res.text();
+      throw new Error(`LLM HTTP ${res.status}: ${errText}`);
     }
 
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      console.error("❌ callLLM JSON inválido:", text.slice(0, 400));
-      throw Object.assign(new Error("LLM retornou JSON inválido"), { status: 502, payload: text });
+    const data = await res.json();
+
+    if (!data.choices || !data.choices.length) {
+      throw new Error("LLM retornou resposta sem choices");
     }
 
-    const content =
-      data?.choices?.[0]?.message?.content ??
-      data?.choices?.[0]?.delta?.content ??
-      "";
+    const text = extractMessage(data.choices[0]);
 
-    console.log("✅ callLLM ok ms=", ms, "chars=", String(content || "").length);
-
-    return String(content || "");
-  } catch (e) {
-    if (e?.name === "AbortError") {
-      console.error("⏱️ callLLM timeout (25s)");
-      throw Object.assign(new Error("LLM timeout"), { status: 504 });
+    if (!text) {
+      throw new Error("LLM retornou resposta vazia (content, reasoning_content e reasoning null)");
     }
-    throw e;
-  } finally {
-    clearTimeout(t);
+
+    return {
+      text,
+      usage: data.usage || null,
+      raw: data
+    };
+
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("LLM Timeout (abortado após 45s)");
+    }
+
+    throw err;
   }
 }

@@ -1,85 +1,73 @@
+import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import pg from "pg";
-import dotenv from "dotenv";
+import { pool } from "./pool.js";
 
-dotenv.config();
+const MIGRATION_TIMEOUT_MS = 30_000;
 
-const { Pool } = pg;
-
-if (!process.env.DATABASE_URL) {
-  console.error("❌ DATABASE_URL não definido no .env");
+const killTimer = setTimeout(() => {
+  console.error("[migrate] timeout — abortando");
   process.exit(1);
-}
+}, MIGRATION_TIMEOUT_MS);
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl:
-    process.env.DATABASE_URL.includes("rlwy.net") ||
-    process.env.DATABASE_URL.includes("railway")
-      ? { rejectUnauthorized: false }
-      : undefined,
-});
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const migrationsDir = path.join(__dirname, "..", "..", "migrations");
-
-async function ensureMigrationsTable() {
+async function ensureTable() {
   await pool.query(`
-    create table if not exists schema_migrations (
-      id text primary key,
-      applied_at timestamptz not null default now()
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      ran_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
 }
 
-async function hasMigration(id) {
-  const r = await pool.query(`select 1 from schema_migrations where id = $1 limit 1`, [id]);
+async function alreadyRan(id) {
+  const r = await pool.query(`SELECT 1 FROM schema_migrations WHERE id=$1`, [id]);
   return r.rowCount > 0;
 }
 
-async function applyMigration(id, sql) {
-  await pool.query("begin");
-  try {
-    await pool.query(sql);
-    await pool.query(`insert into schema_migrations(id) values($1)`, [id]);
-    await pool.query("commit");
-    console.log(`✅ Applied migration: ${id}`);
-  } catch (e) {
-    await pool.query("rollback");
-    console.error(`❌ Migration failed: ${id}`);
-    throw e;
-  }
+async function markRan(id) {
+  await pool.query(`INSERT INTO schema_migrations (id) VALUES ($1)`, [id]);
 }
 
-async function main() {
-  await ensureMigrationsTable();
+async function run() {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const migrationsDir = path.join(__dirname, "..", "migrations");
 
-  const files = fs
-    .readdirSync(migrationsDir)
-    .filter((f) => f.endsWith(".sql"))
-    .sort();
+  await ensureTable();
 
-  if (files.length === 0) {
-    console.error("❌ Nenhuma migration .sql encontrada em /migrations");
-    process.exit(1);
-  }
+  const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith(".sql")).sort();
 
   for (const file of files) {
-    if (await hasMigration(file)) {
+    const id = file;
+    if (await alreadyRan(id)) {
       console.log(`↪️  Skipped (already applied): ${file}`);
       continue;
     }
+
+    console.log(`[migrate] running: ${file}`);
     const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
-    await applyMigration(file, sql);
+
+    await pool.query("BEGIN");
+    try {
+      await pool.query(sql);
+      await markRan(id);
+      await pool.query("COMMIT");
+      console.log(`[migrate] done: ${file}`);
+    } catch (e) {
+      await pool.query("ROLLBACK");
+      console.error(`[migrate] failed: ${file}`, e?.message || e);
+      process.exit(1);
+    }
   }
 
-  await pool.end();
+  console.log("[migrate] all done");
+  process.exit(0);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+run()
+  .catch((e) => {
+    console.error("[migrate] fatal:", e?.message || e);
+    process.exit(1);
+  })
+  .finally(() => clearTimeout(killTimer));
