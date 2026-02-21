@@ -1,29 +1,25 @@
 {
   "name": "openclaw-saas-v2",
   "version": "2.0.0",
+  "private": true,
   "type": "module",
   "main": "src/server.js",
   "scripts": {
     "dev": "nodemon src/server.js",
-    "start": "node src/server.js",
+    "start": "node src/db/migrate.js && node src/server.js",
     "migrate": "node src/db/migrate.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "@google/genai": "^1.42.0",
-    "@google/generative-ai": "^0.24.1",
-    "cors": "^2.8.6",
+    "cors": "^2.8.5",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
-    "multer": "^2.0.2",
     "nanoid": "^5.1.6",
-    "node-cron": "^4.2.1",
-    "pdf-parse": "^2.4.5",
-    "pdfkit": "^0.17.2",
     "pg": "^8.18.0",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
-    "uuid": "^13.0.0",
-    "web-push": "^3.6.7",
     "zod": "^4.3.6"
   },
   "devDependencies": {
