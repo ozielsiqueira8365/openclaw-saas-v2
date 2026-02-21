@@ -1,57 +1,47 @@
-import "dotenv/config";
-import express from "express";
-import { pool } from "./db/pool.js";
+import express from 'express';
+import { sanitizeBody } from './middleware/sanitizeBody.js';
+import { requireBearer, authFromApiKey } from './middleware/auth.js';
+import { chatHandler } from './llm/llmClient.js';
+import { pool } from './db/pool.js';
 
 const app = express();
+const PORT = process.env.PORT || 8080;
 
-// logs simples
-app.use((req, _res, next) => {
-  console.log(`[REQ] ${req.method} ${req.url}`);
-  next();
-});
+// Middleware de sanitização de JSON (substitui express.json())
+app.use(sanitizeBody);
 
-// json
-app.use(express.json({ limit: "1mb" }));
-
-// home
-app.get("/", (_req, res) => {
-  res.status(200).send("OpenClaw SaaS v2 online ✅");
-});
-
-// health
-app.get("/health", async (_req, res) => {
+// Health check
+app.get('/health', async (req, res) => {
   try {
-    await pool.query("SELECT 1");
+    const dbResult = await pool.query('SELECT NOW()');
     res.json({
       ok: true,
-      port: Number(process.env.PORT || 8080),
-      db: "postgres",
+      port: PORT,
+      db: 'postgres',
+      dbTime: dbResult.rows[0].now,
       llm: {
-        baseUrl: process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1",
-        model: process.env.NVIDIA_MODEL || "moonshotai/kimi-k2.5",
-      },
+        baseUrl: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+        model: process.env.NVIDIA_MODEL || 'moonshotai/kimi-k2.5'
+      }
     });
-  } catch (e) {
-    console.error("[health] db error:", e?.message || e);
-    res.status(500).json({ ok: false, db: "down" });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'DB_ERROR', message: err.message });
   }
 });
 
-// ping (GET e POST)
-app.get("/__ping", (_req, res) => res.status(200).send("pong"));
-app.post("/__ping", (_req, res) => res.status(200).json({ ok: true }));
+// Ping routes
+app.get('/__ping', (req, res) => res.send('pong'));
+app.post('/__ping', (req, res) => res.json({ ok: true, body: req.body }));
 
-// capturar erros globais
-process.on("unhandledRejection", (err) => console.error("unhandledRejection:", err));
-process.on("uncaughtException", (err) => console.error("uncaughtException:", err));
+// Chat endpoint com auth
+app.post('/v1/chat', requireBearer, authFromApiKey, chatHandler);
 
-const PORT = Number(process.env.PORT || 8080);
-
-const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 SaaS v2 online na porta ${PORT}`);
+// Error handler global
+app.use((err, req, res, next) => {
+  console.error('[GLOBAL ERROR]', err);
+  res.status(500).json({ error: 'INTERNAL_ERROR', message: err.message });
 });
 
-// timeouts (evita conexão pendurada)
-server.requestTimeout = 60_000;
-server.headersTimeout = 65_000;
-server.keepAliveTimeout = 65_000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 SaaS v2 online na porta ${PORT}`);
+});

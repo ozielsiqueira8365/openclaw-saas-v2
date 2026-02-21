@@ -1,19 +1,18 @@
-import "dotenv/config";
-import pg from "pg";
-
+import pg from 'pg';
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
-  console.error("❌ DATABASE_URL não configurada");
-}
-
-export const pool = new Pool({
+const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Railway Postgres normalmente precisa SSL; se quebrar local, set PGSSL=false
-  ssl: process.env.PGSSL === "false" ? false : { rejectUnauthorized: false },
+  ssl: {
+    rejectUnauthorized: false
+  },
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
 });
 
-// log básico de erros do pool
-pool.on("error", (err) => {
-  console.error("🔥 Postgres pool error:", err);
+pool.on('error', (err) => {
+  console.error('[DB POOL ERROR]', err);
 });
+
+export { pool };
