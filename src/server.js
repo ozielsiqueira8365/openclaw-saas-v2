@@ -15,7 +15,7 @@ app.use(express.json({ limit: "10mb" }));
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    port: Number(process.env.PORT || 3000),
+    port: Number(process.env.PORT || 8080),
     db: process.env.DATABASE_URL ? "postgres" : "none",
     llm: {
       baseUrl: process.env.MOONSHOT_BASE_URL,
@@ -24,22 +24,23 @@ app.get("/health", (req, res) => {
   });
 });
 
-// ✅ Em produção é recomendado desativar admin
-if (process.env.NODE_ENV !== "production") {
-  app.use(adminRouter());
+// ✅ ADMIN router já tem "/admin/..." DENTRO das rotas.
+// Então aqui tem que ser na raiz:
+if (process.env.ADMIN_TOKEN) {
+  app.use(adminRouter()); // <- CHAMAR a função
+} else {
+  console.warn("⚠️ ADMIN_TOKEN não configurado. Rotas /admin/* desativadas.");
 }
 
-// ✅ chatRouter agora é uma FUNÇÃO que retorna o router
-app.use(chatRouter());
+// ✅ Chat router (router pronto /v1/chat etc.)
+app.use(chatRouter);
 
-const PORT = Number(process.env.PORT || 3000);
-
-const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 SaaS v2 online na porta ${PORT}`);
+// ✅ 404 em JSON (melhor que "Cannot POST ...")
+app.use((req, res) => {
+  res.status(404).json({ ok: false, error: "not_found", path: req.path });
 });
 
-// Debug: se fechar sozinho, você vê
-server.on("close", () => console.log("🧨 server CLOSE event disparado"));
-process.on("exit", (code) => console.log("🧨 process EXIT:", code));
-process.on("uncaughtException", (err) => console.log("💥 uncaughtException:", err));
-process.on("unhandledRejection", (err) => console.log("💥 unhandledRejection:", err));
+const PORT = Number(process.env.PORT || 8080);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 SaaS v2 online na porta ${PORT}`);
+});
